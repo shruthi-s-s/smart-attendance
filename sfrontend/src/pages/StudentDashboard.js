@@ -1,15 +1,20 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import axios from "axios";
 
-export default function StudentDashboard() {
+function StudentDashboard() {
   const [selectedSubject, setSelectedSubject] = useState(null);
   const [code, setCode] = useState("");
-  const [attendance, setAttendance] = useState(0);
-  const [attendanceList, setAttendanceList] = useState([]);
+  const [percentage, setPercentage] = useState(0);
+  const [stats, setStats] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const name = localStorage.getItem("name") || "Student";
-  const regNo = localStorage.getItem("regNo") || "";
-  const className = localStorage.getItem("className") || "AIDS-A";
+  const API_BASE = "http://localhost:8080/auth";
+
+  const studentName = localStorage.getItem("studentName") || "Student";
+  const regNo = localStorage.getItem("studentRegNo") || "";
+  const className = localStorage.getItem("studentClassName") || "";
 
   const subjects = [
     "Operating Systems",
@@ -20,375 +25,511 @@ export default function StudentDashboard() {
     "Machine Learning",
   ];
 
-  const fetchAttendance = async (subject) => {
+  const loadStudentStats = async (subject) => {
     try {
-      const res = await axios.get("http://localhost:8080/auth/attendance-history", {
-        params: {
-          regNo: regNo,
-          subject: subject,
-        },
+      const res = await axios.get(`${API_BASE}/student-stats`, {
+        params: { regNo, subject },
       });
-
-      setAttendanceList(res.data);
-    } catch (err) {
-      console.log("ATTENDANCE HISTORY ERROR:", err);
-      setAttendanceList([]);
+      setStats(res.data);
+    } catch {
+      setStats(null);
     }
   };
 
-  const loadAttendancePercentage = async (subject) => {
+  const loadPercentage = async (subject) => {
     try {
-      const res = await axios.get(
-        `http://localhost:8080/auth/attendance-percentage?regNo=${encodeURIComponent(
-          regNo
-        )}&subject=${encodeURIComponent(subject)}`
-      );
-
-      setAttendance(res.data.percentage || 0);
-    } catch (err) {
-      console.log("ATTENDANCE % ERROR:", err);
-      setAttendance(0);
+      const res = await axios.get(`${API_BASE}/attendance-percentage`, {
+        params: { regNo, subject },
+      });
+      setPercentage(res.data.percentage || 0);
+    } catch {
+      setPercentage(0);
     }
   };
 
-  useEffect(() => {
-    if (selectedSubject) {
-      loadAttendancePercentage(selectedSubject);
-      fetchAttendance(selectedSubject);
+  const loadHistory = async (subject) => {
+    try {
+      const res = await axios.get(`${API_BASE}/attendance-history`, {
+        params: { regNo, subject },
+      });
+      setHistory(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setHistory([]);
     }
-  }, [selectedSubject]);
+  };
 
-  const handleSubmit = async () => {
-    if (!selectedSubject) {
-      alert("Select a subject");
+  const openSubject = async (subject) => {
+    setSelectedSubject(subject);
+    setCode("");
+    setMessage("");
+    setStats(null);
+    setPercentage(0);
+    setHistory([]);
+
+    await loadPercentage(subject);
+    await loadStudentStats(subject);
+    await loadHistory(subject);
+  };
+
+  const backToSubjects = () => {
+    setSelectedSubject(null);
+    setCode("");
+    setMessage("");
+    setStats(null);
+    setPercentage(0);
+    setHistory([]);
+  };
+
+  const submitCode = () => {
+    if (!regNo || !className) {
+      alert("Student details missing. Please login again.");
       return;
     }
 
     if (!code.trim()) {
-      alert("Enter code");
+      alert("Enter attendance code");
       return;
     }
 
-    if (!regNo) {
-      alert("Student register number missing. Login again.");
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser");
       return;
     }
 
-    try {
-      const payload = {
-        code: code.trim(),
-        regNo: regNo,
-        className: className,
-        subject: selectedSubject,
-      };
+    setLoading(true);
+    setMessage("Checking location...");
 
-      const res = await axios.post(
-        "http://localhost:8080/auth/mark-attendance",
-        payload
-      );
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const payload = {
+            code,
+            regNo,
+            subject: selectedSubject,
+            className,
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          };
 
-      alert(res.data.message || "Attendance marked");
+          const res = await axios.post(`${API_BASE}/mark-attendance`, payload);
 
-      setCode("");
-      loadAttendancePercentage(selectedSubject);
-      fetchAttendance(selectedSubject);
-    } catch (err) {
-      console.log("MARK ATTENDANCE ERROR:", err);
-      console.log("MARK ATTENDANCE RESPONSE:", err.response);
+          setMessage(res.data.message || "Attendance marked successfully");
+          setCode("");
 
-      alert(
-        err.response?.data?.message ||
-          err.response?.data ||
-          "Error marking attendance"
-      );
-    }
+          await loadPercentage(selectedSubject);
+          await loadStudentStats(selectedSubject);
+          await loadHistory(selectedSubject);
+        } catch (err) {
+          setMessage(
+            err.response?.data?.message ||
+              err.response?.data ||
+              "Attendance failed"
+          );
+        } finally {
+          setLoading(false);
+        }
+      },
+      () => {
+        setMessage("Location permission denied. Attendance cannot be marked.");
+        setLoading(false);
+      }
+    );
   };
 
-  return (
-    <div style={styles.container}>
-      <div style={styles.navbar}>
-        {selectedSubject ? selectedSubject : `Welcome, ${name}`}
-      </div>
+  const getStatusText = () => {
+    if (percentage >= 80) return "SAFE";
+    if (percentage >= 75) return "RISK";
+    return "CRITICAL";
+  };
 
-      {!selectedSubject && (
-        <div style={styles.grid}>
+  const getStatusStyle = () => {
+    if (percentage >= 80) return styles.safeBadge;
+    if (percentage >= 75) return styles.riskBadge;
+    return styles.criticalBadge;
+  };
+
+  if (!selectedSubject) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.topBar}>
+          <h1 style={styles.title}>Welcome, {studentName}</h1>
+        </div>
+
+        <div style={styles.subjectGrid}>
           {subjects.map((subject, index) => (
-            <div
+            <button
               key={index}
-              style={styles.card}
-              onClick={() => setSelectedSubject(subject)}
+              style={styles.subjectCard}
+              onClick={() => openSubject(subject)}
             >
               {subject}
-            </div>
+            </button>
           ))}
         </div>
-      )}
+      </div>
+    );
+  }
 
-      {selectedSubject && (
-        <>
-          <div style={styles.main}>
-            <div style={styles.leftPanel}>
-              <h3 style={{ marginTop: 0 }}>Enter Code</h3>
+  return (
+    <div style={styles.page}>
+      <div style={styles.topBar}>
+        <div>
+          <h1 style={styles.title}>Welcome, {studentName}</h1>
+          <p style={styles.subtitle}>
+            {regNo} - {className}
+          </p>
+        </div>
 
-              <input
-                style={styles.input}
-                placeholder="Enter code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                maxLength={4}
-              />
+        <button style={styles.backButton} onClick={backToSubjects}>
+          Back
+        </button>
+      </div>
 
-              <button style={styles.button} onClick={handleSubmit}>
-                Submit
-              </button>
+      <div style={styles.detailGrid}>
+        <div style={styles.card}>
+          <div style={styles.sectionLabel}>MARK ATTENDANCE</div>
 
-              <button
-                style={styles.backBtn}
-                onClick={() => {
-                  setSelectedSubject(null);
-                  setCode("");
-                  setAttendance(0);
-                  setAttendanceList([]);
-                }}
-              >
-                ← Back
-              </button>
+          <h2 style={styles.subjectTitle}>{selectedSubject}</h2>
+
+          <input
+            style={styles.input}
+            type="text"
+            placeholder="Enter 4-digit code"
+            value={code}
+            maxLength="4"
+            onChange={(e) => setCode(e.target.value)}
+          />
+
+          <button
+            style={styles.primaryButton}
+            onClick={submitCode}
+            disabled={loading}
+          >
+            {loading ? "Checking Location..." : "Submit Code"}
+          </button>
+
+        
+
+          {message && <p style={styles.message}>{message}</p>}
+        </div>
+
+        <div style={styles.card}>
+          <div style={styles.sectionLabel}>ATTENDANCE STATUS</div>
+
+          <h2 style={styles.percentage}>{Number(percentage).toFixed(1)}%</h2>
+
+          <span style={getStatusStyle()}>{getStatusText()}</span>
+
+          <div style={styles.statsGrid}>
+            <div>
+              <p style={styles.statLabel}>Present Count</p>
+              <h3 style={styles.statValue}>{stats?.presentCount || 0}</h3>
             </div>
 
-            <div style={styles.rightPanel}>
-              <div style={styles.circle}>
-                <h1 style={styles.circleValue}>{attendance.toFixed(0)}%</h1>
-                <p style={styles.circleLabel}>Attendance</p>
-              </div>
+            <div>
+              <p style={styles.statLabel}>Total Classes</p>
+              <h3 style={styles.statValue}>{stats?.totalClasses || 0}</h3>
             </div>
           </div>
+        </div>
+      </div>
 
-          <div style={styles.historyBox}>
-            <h3 style={styles.historyTitle}>Attendance History</h3>
+      <div style={styles.historyCard}>
+        <h2 style={styles.historyTitle}>Attendance History</h2>
 
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Date</th>
-                  <th style={styles.th}>Time</th>
-                  <th style={styles.th}>Subject</th>
-                  <th style={styles.th}>Status</th>
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Date</th>
+              <th style={styles.th}>Subject</th>
+              <th style={styles.th}>Status</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {history.length > 0 ? (
+              history.map((item, index) => (
+                <tr key={index}>
+                  <td style={styles.td}>{item.date}</td>
+                  <td style={styles.td}>{item.subject}</td>
+                  <td style={styles.td}>
+                    <span
+                      style={
+                        item.status === "PRESENT"
+                          ? styles.presentPill
+                          : styles.absentPill
+                      }
+                    >
+                      {item.status}
+                    </span>
+                  </td>
                 </tr>
-              </thead>
-
-              <tbody>
-                {attendanceList.length > 0 ? (
-                  attendanceList.map((item, index) => (
-                    <tr key={index}>
-                      <td style={styles.td}>{item.date || "N/A"}</td>
-                      <td style={styles.td}>
-                        {item.time ? item.time.substring(0, 8) : "N/A"}
-                      </td>
-                      <td style={styles.td}>{item.subject}</td>
-                      <td style={styles.td}>
-                        <span
-                          style={
-                            item.status === "PRESENT"
-                              ? styles.present
-                              : styles.absent
-                          }
-                        >
-                          {item.status}
-                        </span>
-                      </td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td style={styles.empty} colSpan="4">
-                      No attendance records found
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
+              ))
+            ) : (
+              <tr>
+                <td style={styles.emptyRow} colSpan="3">
+                  No attendance history found
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
 
+export default StudentDashboard;
+
 const styles = {
-  container: {
+  page: {
     minHeight: "100vh",
-    background: "#ffffff",
-    fontFamily: "Segoe UI, sans-serif",
+    background: "#FFFFFF",
+    padding: "24px",
+    fontFamily: "'Segoe UI', sans-serif",
   },
 
-  navbar: {
+  topBar: {
     background: "#050F1E",
-    color: "#FFFFFF",
-    padding: "20px 40px",
-    fontSize: "22px",
-    fontWeight: "600",
+    padding: "28px 34px",
+    marginBottom: "46px",
+    borderRadius: "0px",
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
   },
 
-  grid: {
+  title: {
+    margin: 0,
+    color: "#FFFFFF",
+    fontSize: "28px",
+    fontWeight: "700",
+  },
+
+  subtitle: {
+    margin: "8px 0 0 0",
+    color: "#DBEAFF",
+    fontSize: "15px",
+  },
+
+  subjectGrid: {
     display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: "25px",
-    padding: "40px",
+    gridTemplateColumns: "repeat(5, 1fr)",
+    gap: "28px",
+    padding: "0 30px",
+  },
+
+  subjectCard: {
+    height: "145px",
+    background: "#082144",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "16px",
+    boxShadow: "0 14px 28px rgba(0,0,0,0.08)",
+    fontSize: "22px",
+    fontWeight: "700",
+    cursor: "pointer",
+  },
+
+  detailGrid: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "28px",
+    maxWidth: "1180px",
+    margin: "0 auto",
   },
 
   card: {
-    background: "#0A1F3D",
+    background: "#050F1E",
+    borderRadius: "18px",
+    padding: "32px",
     color: "#FFFFFF",
-    minHeight: "130px",
-    borderRadius: "16px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    textAlign: "center",
-    fontWeight: "500",
-    fontSize: "20px",
-    cursor: "pointer",
-    boxShadow: "0 10px 25px rgba(0,0,0,0.08)",
   },
 
-  main: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: "30px",
-    padding: "40px",
+  sectionLabel: {
+    color: "#9EB4D4",
+    fontSize: "14px",
+    fontWeight: "700",
+    letterSpacing: "1.4px",
+    marginBottom: "28px",
   },
 
-  leftPanel: {
-    background: "#F8FAFC",
-    borderRadius: "18px",
-    padding: "30px",
-    boxShadow: "0 10px 24px rgba(0,0,0,0.06)",
-  },
-
-  rightPanel: {
-    background: "#F8FAFC",
-    borderRadius: "18px",
-    padding: "30px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    boxShadow: "0 10px 24px rgba(0,0,0,0.06)",
+  subjectTitle: {
+    margin: "0 0 24px 0",
+    fontSize: "30px",
+    color: "#FFFFFF",
   },
 
   input: {
     width: "100%",
-    padding: "14px",
+    padding: "17px",
+    borderRadius: "12px",
+    border: "1px solid #2563EB",
     fontSize: "18px",
-    borderRadius: "10px",
-    border: "1px solid #CBD5E1",
-    marginBottom: "16px",
-    outline: "none",
+    marginBottom: "18px",
     boxSizing: "border-box",
+    outline: "none",
   },
 
-  button: {
+  primaryButton: {
     width: "100%",
-    padding: "14px",
     background: "#2563EB",
     color: "#FFFFFF",
     border: "none",
-    borderRadius: "10px",
-    fontSize: "16px",
-    fontWeight: "600",
+    borderRadius: "999px",
+    padding: "15px",
     cursor: "pointer",
-    marginBottom: "12px",
-  },
-
-  backBtn: {
-    width: "100%",
-    padding: "14px",
-    background: "#E2E8F0",
-    color: "#0F172A",
-    border: "none",
-    borderRadius: "10px",
     fontSize: "16px",
-    fontWeight: "600",
-    cursor: "pointer",
-  },
-
-  circle: {
-    width: "220px",
-    height: "220px",
-    borderRadius: "50%",
-    background: "#0A1F3D",
-    color: "#FFFFFF",
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-
-  circleValue: {
-    margin: 0,
-    fontSize: "48px",
     fontWeight: "700",
   },
 
-  circleLabel: {
-    marginTop: "10px",
-    fontSize: "18px",
-    opacity: 0.9,
+  geoText: {
+    color: "#93C5FD",
+    fontSize: "13px",
+    textAlign: "center",
+    marginTop: "18px",
   },
 
-  historyBox: {
-    margin: "0 40px 40px 40px",
+  message: {
+    color: "#DBEAFF",
+    fontSize: "15px",
+    fontWeight: "600",
+    marginTop: "16px",
+    textAlign: "center",
+  },
+
+  percentage: {
+    fontSize: "64px",
+    margin: "0 0 18px 0",
+    color: "#FFFFFF",
+  },
+
+  safeBadge: {
+    display: "inline-block",
+    background: "#DCFCE7",
+    color: "#166534",
+    border: "1px solid #86EFAC",
+    borderRadius: "999px",
+    padding: "8px 18px",
+    fontWeight: "700",
+  },
+
+  riskBadge: {
+    display: "inline-block",
+    background: "#FEF3C7",
+    color: "#92400E",
+    border: "1px solid #FCD34D",
+    borderRadius: "999px",
+    padding: "8px 18px",
+    fontWeight: "700",
+  },
+
+  criticalBadge: {
+    display: "inline-block",
+    background: "#FEE2E2",
+    color: "#991B1B",
+    border: "1px solid #FCA5A5",
+    borderRadius: "999px",
+    padding: "8px 18px",
+    fontWeight: "700",
+  },
+
+  statsGrid: {
+    marginTop: "34px",
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: "24px",
+  },
+
+  statLabel: {
+    color: "#9EB4D4",
+    fontSize: "15px",
+    margin: 0,
+  },
+
+  statValue: {
+    color: "#FFFFFF",
+    fontSize: "32px",
+    margin: "8px 0 0 0",
+  },
+
+  backButton: {
+    background: "#2563EB",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "999px",
+    padding: "12px 22px",
+    cursor: "pointer",
+    fontSize: "15px",
+    fontWeight: "700",
+  },
+
+  historyCard: {
+    margin: "38px auto 0 auto",
+    maxWidth: "1260px",
     background: "#F8FAFC",
     borderRadius: "18px",
-    padding: "25px",
-    boxShadow: "0 10px 24px rgba(0,0,0,0.06)",
+    padding: "28px",
+    boxShadow: "0 12px 28px rgba(0,0,0,0.05)",
   },
 
   historyTitle: {
-    marginTop: 0,
-    marginBottom: "15px",
-    color: "#0F172A",
+    margin: "0 0 18px 0",
+    color: "#050F1E",
+    fontSize: "22px",
+    fontWeight: "700",
   },
 
   table: {
     width: "100%",
     borderCollapse: "collapse",
-    background: "#FFFFFF",
-    borderRadius: "12px",
     overflow: "hidden",
+    borderRadius: "12px",
   },
 
   th: {
-    background: "#0A1F3D",
+    background: "#082144",
     color: "#FFFFFF",
-    padding: "14px",
     textAlign: "left",
+    padding: "16px",
+    fontSize: "15px",
   },
 
   td: {
-    padding: "14px",
+    background: "#FFFFFF",
+    color: "#050F1E",
+    padding: "16px",
     borderBottom: "1px solid #E2E8F0",
-    color: "#0F172A",
+    fontSize: "15px",
   },
 
-  present: {
-    color: "#166534",
+  presentPill: {
+    display: "inline-block",
     background: "#DCFCE7",
-    padding: "6px 12px",
+    color: "#166534",
+    border: "1px solid #86EFAC",
     borderRadius: "999px",
+    padding: "8px 14px",
+    fontSize: "13px",
     fontWeight: "700",
   },
 
-  absent: {
-    color: "#991B1B",
+  absentPill: {
+    display: "inline-block",
     background: "#FEE2E2",
-    padding: "6px 12px",
+    color: "#991B1B",
+    border: "1px solid #FCA5A5",
     borderRadius: "999px",
+    padding: "8px 14px",
+    fontSize: "13px",
     fontWeight: "700",
   },
 
-  empty: {
-    padding: "20px",
+  emptyRow: {
+    background: "#FFFFFF",
+    color: "#94A3B8",
+    padding: "24px",
     textAlign: "center",
-    color: "#64748B",
+    fontSize: "15px",
   },
 };

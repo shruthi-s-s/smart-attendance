@@ -13,10 +13,15 @@ function LoginPage() {
       if (role === "student") {
         const res = await studentLogin({ email, password });
 
+        // ✅ FIXED KEYS (THIS WAS YOUR BUG)
         localStorage.setItem("role", "student");
-        localStorage.setItem("name", res.data.name || "Student");
-        localStorage.setItem("regNo", res.data.regNo || "");
-        localStorage.setItem("className", res.data.className || "AIDS-A");
+        localStorage.setItem("studentName", res.data.name || "Student");
+        localStorage.setItem("studentRegNo", res.data.regNo || "");
+        localStorage.setItem(
+          "studentClassName",
+          res.data.className || "AIDS-A"
+        );
+        localStorage.setItem("studentEmail", res.data.email || email);
 
         navigate("/student");
       } else {
@@ -24,6 +29,7 @@ function LoginPage() {
 
         localStorage.setItem("role", "faculty");
         localStorage.setItem("facultyName", res.data.name || "Faculty");
+        localStorage.setItem("facultyEmail", res.data.email || email);
         localStorage.setItem(
           "facultySubject",
           res.data.subject || "Operating Systems"

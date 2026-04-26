@@ -4,86 +4,126 @@ import axios from "axios";
 function FacultyDashboard() {
   const [code, setCode] = useState("");
   const [students, setStudents] = useState([]);
+  const [summary, setSummary] = useState([]);
+  const [showSummary, setShowSummary] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [remainingTime, setRemainingTime] = useState(0);
+  const [presentCount, setPresentCount] = useState(0);
+  const [absentCount, setAbsentCount] = useState(0);
 
-  const facultyName = localStorage.getItem("facultyName") || "OS Faculty";
+  const facultyName = localStorage.getItem("facultyName") || "Faculty";
   const subject = localStorage.getItem("facultySubject") || "Operating Systems";
   const className = localStorage.getItem("facultyClassName") || "AIDS-A";
+  const facultyEmail = localStorage.getItem("facultyEmail") || "faculty@college.com";
 
   const API_BASE = "http://localhost:8080/auth";
 
   const loadAttendance = async () => {
     try {
       const res = await axios.get(`${API_BASE}/current-attendance`);
+      const data = Array.isArray(res.data) ? res.data : [];
 
-      setStudents(Array.isArray(res.data) ? res.data : []);
-    } catch (err) {
-      console.log("LOAD ATTENDANCE ERROR:", err);
-      console.log("LOAD ATTENDANCE RESPONSE:", err.response);
-
+      setStudents(data);
+      setPresentCount(data.filter((s) => s.status === "PRESENT").length);
+      setAbsentCount(data.filter((s) => s.status === "ABSENT").length);
+    } catch {
       setStudents([]);
+      setPresentCount(0);
+      setAbsentCount(0);
+    }
+  };
 
-      alert(
-        "Error loading attendance: " +
-          (err.response?.status || "NO STATUS") +
-          " - " +
-          (err.response?.data?.message || err.response?.data || err.message)
-      );
+  const loadSummary = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/attendance-summary`, {
+        params: {
+          className: className,
+          subject: subject,
+        },
+      });
+
+      setSummary(Array.isArray(res.data) ? res.data : []);
+      setShowSummary(true);
+    } catch {
+      alert("Error loading attendance summary");
+    }
+  };
+
+  const loadRemainingTime = async () => {
+    try {
+      const res = await axios.get(`${API_BASE}/remaining-time`);
+
+      if (res.data.active) {
+        setRemainingTime(res.data.remainingSeconds || 0);
+      } else {
+        setRemainingTime(0);
+        setCode("");
+      }
+    } catch {
+      setRemainingTime(0);
     }
   };
 
   const generateCode = async () => {
-    try {
-      setLoading(true);
+    setLoading(true);
 
-      const payload = {
-        subject: subject,
-        className: className,
-      };
-
-      console.log("GENERATE CODE PAYLOAD:", payload);
-
-      const res = await axios.post(`${API_BASE}/generate-code`, payload);
-
-      setCode(res.data.code || "");
-      await loadAttendance();
-    } catch (err) {
-      console.log("GENERATE CODE ERROR:", err);
-      console.log("GENERATE CODE RESPONSE:", err.response);
-
-      alert(
-        err.response?.data?.message ||
-          err.response?.data ||
-          "Error generating code"
-      );
-    } finally {
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported");
       setLoading(false);
+      return;
     }
+
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const payload = {
+            subject,
+            className,
+            facultyEmail,
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          };
+
+          const res = await axios.post(`${API_BASE}/generate-code`, payload);
+
+          setCode(res.data.code || "");
+          setRemainingTime(15);
+          setShowSummary(false);
+          await loadAttendance();
+        } catch (err) {
+          alert(err.response?.data?.message || err.response?.data || "Error generating code");
+        } finally {
+          setLoading(false);
+        }
+      },
+      () => {
+        alert("Allow location access to generate code");
+        setLoading(false);
+      }
+    );
   };
 
   const endAttendance = async () => {
     try {
       await axios.post(`${API_BASE}/end-attendance`);
       setCode("");
+      setRemainingTime(0);
       setStudents([]);
+      setPresentCount(0);
+      setAbsentCount(0);
       alert("Attendance session ended");
-    } catch (err) {
-      console.log("END ATTENDANCE ERROR:", err);
-      console.log("END ATTENDANCE RESPONSE:", err.response);
-
-      alert(
-        err.response?.data?.message ||
-          err.response?.data ||
-          "Error ending attendance"
-      );
+    } catch {
+      alert("Error ending attendance");
     }
   };
 
   useEffect(() => {
     loadAttendance();
+    loadRemainingTime();
 
     const interval = setInterval(() => {
       loadAttendance();
+      loadRemainingTime();
     }, 2000);
 
     return () => clearInterval(interval);
@@ -100,9 +140,15 @@ function FacultyDashboard() {
             </p>
           </div>
 
-          <div style={styles.profileWrap}>
-            <div style={styles.profileAvatar}></div>
-            <span style={styles.profileText}>Profile</span>
+          <div style={styles.topRight}>
+            <button style={styles.viewButton} onClick={loadSummary}>
+              View Attendance
+            </button>
+
+            <div style={styles.profileWrap}>
+              <div style={styles.profileAvatar}></div>
+              <span style={styles.profileText}>Profile</span>
+            </div>
           </div>
         </div>
 
@@ -114,13 +160,15 @@ function FacultyDashboard() {
               <span style={styles.codeText}>{code || "----"}</span>
             </div>
 
+            <p style={styles.timerText}>
+              Time Left: {remainingTime > 0 ? `${remainingTime}s` : "Expired"}
+            </p>
+
+            
+
             <div style={styles.buttonRow}>
-              <button
-                style={styles.primaryButton}
-                onClick={generateCode}
-                disabled={loading}
-              >
-                {loading ? "Generating..." : "Generate Code"}
+              <button style={styles.primaryButton} onClick={generateCode} disabled={loading}>
+                {loading ? "Getting Location..." : "Generate Code"}
               </button>
 
               <button style={styles.secondaryButton} onClick={loadAttendance}>
@@ -136,50 +184,110 @@ function FacultyDashboard() {
           <div style={styles.tableCard}>
             <div style={styles.tableHeaderWrap}>
               <div>
-                <div style={styles.sectionLabel}>CURRENT SESSION</div>
-                <h3 style={styles.tableTitle}>{subject} Attendance</h3>
+                <div style={styles.sectionLabel}>
+                  {showSummary ? "ATTENDANCE SUMMARY" : "CURRENT SESSION"}
+                </div>
+                <h3 style={styles.tableTitle}>
+                  {subject} Attendance
+                </h3>
               </div>
 
-              <span style={styles.badge}>{students.length} Students</span>
+              {!showSummary && (
+                <div style={styles.badgeGroup}>
+                  <span style={styles.badge}>{students.length} Students</span>
+                  <span style={styles.presentBadge}>{presentCount} Present</span>
+                  <span style={styles.absentBadge}>{absentCount} Absent</span>
+                </div>
+              )}
+
+              {showSummary && (
+                <button style={styles.backSmallButton} onClick={() => setShowSummary(false)}>
+                  Back to Session
+                </button>
+              )}
             </div>
 
-            <table style={styles.table}>
-              <thead>
-                <tr>
-                  <th style={styles.th}>Reg No</th>
-                  <th style={styles.th}>Name</th>
-                  <th style={styles.th}>Status</th>
-                </tr>
-              </thead>
+            {!showSummary ? (
+              <table style={styles.table}>
+                <thead>
+                  <tr>
+                    <th style={styles.th}>Reg No</th>
+                    <th style={styles.th}>Name</th>
+                    <th style={styles.th}>Status</th>
+                  </tr>
+                </thead>
 
-              <tbody>
-                {students.length > 0 ? (
-                  students.map((student, index) => (
-                    <tr key={index}>
-                      <td style={styles.td}>{student?.regNo || "N/A"}</td>
-                      <td style={styles.td}>{student?.name || "Unknown"}</td>
-                      <td style={styles.td}>
-                        <span
-                          style={
-                            student?.status === "PRESENT"
-                              ? styles.presentPill
-                              : styles.absentPill
-                          }
-                        >
-                          {student?.status || "ABSENT"}
-                        </span>
+                <tbody>
+                  {students.length > 0 ? (
+                    students.map((student, index) => (
+                      <tr key={index}>
+                        <td style={styles.td}>{student?.regNo || "N/A"}</td>
+                        <td style={styles.td}>{student?.name || "Unknown"}</td>
+                        <td style={styles.td}>
+                          <span
+                            style={
+                              student?.status === "PRESENT"
+                                ? styles.presentPill
+                                : styles.absentPill
+                            }
+                          >
+                            {student?.status || "ABSENT"}
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td style={styles.emptyRow} colSpan="3">
+                        No current session records yet
                       </td>
                     </tr>
-                  ))
-                ) : (
+                  )}
+                </tbody>
+              </table>
+            ) : (
+              <table style={styles.table}>
+                <thead>
                   <tr>
-                    <td style={styles.emptyRow} colSpan="3">
-                      No current session records yet
-                    </td>
+                    <th style={styles.th}>Reg No</th>
+                    <th style={styles.th}>Name</th>
+                    <th style={styles.th}>Classes Attended</th>
+                    <th style={styles.th}>Total Classes</th>
+                    <th style={styles.th}>Percentage</th>
                   </tr>
-                )}
-              </tbody>
-            </table>
+                </thead>
+
+                <tbody>
+                  {summary.length > 0 ? (
+                    summary.map((student, index) => (
+                      <tr key={index}>
+                        <td style={styles.td}>{student.regNo}</td>
+                        <td style={styles.td}>{student.name}</td>
+                        <td style={styles.td}>{student.presentCount}</td>
+                        <td style={styles.td}>{student.totalClasses}</td>
+                        <td style={styles.td}>
+                          <span
+                            style={
+                              student.percentage >= 75
+                                ? styles.presentPill
+                                : styles.absentPill
+                            }
+                          >
+                            {Number(student.percentage).toFixed(1)}%
+                          </span>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td style={styles.emptyRow} colSpan="5">
+                        No attendance summary found
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>
@@ -225,6 +333,23 @@ const styles = {
     fontSize: "15px",
   },
 
+  topRight: {
+    display: "flex",
+    alignItems: "center",
+    gap: "24px",
+  },
+
+  viewButton: {
+    background: "#F97316",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "999px",
+    padding: "12px 28px",
+    cursor: "pointer",
+    fontSize: "15px",
+    fontWeight: "700",
+  },
+
   profileWrap: {
     display: "flex",
     alignItems: "center",
@@ -256,7 +381,6 @@ const styles = {
     background: "#050F1E",
     borderRadius: "20px",
     padding: "28px",
-    boxShadow: "0 12px 28px rgba(5,15,30,0.08)",
   },
 
   sectionLabel: {
@@ -276,7 +400,7 @@ const styles = {
     display: "flex",
     justifyContent: "center",
     alignItems: "center",
-    marginBottom: "18px",
+    marginBottom: "14px",
   },
 
   codeText: {
@@ -284,6 +408,21 @@ const styles = {
     fontSize: "52px",
     fontWeight: "700",
     letterSpacing: "12px",
+  },
+
+  timerText: {
+    color: "#DBEAFF",
+    fontSize: "16px",
+    fontWeight: "600",
+    margin: "0 0 8px 0",
+    textAlign: "center",
+  },
+
+  locationNote: {
+    color: "#93C5FD",
+    fontSize: "13px",
+    textAlign: "center",
+    marginBottom: "18px",
   },
 
   buttonRow: {
@@ -328,7 +467,6 @@ const styles = {
   tableCard: {
     background: "#FFFFFF",
     border: "1px solid #E2E8F0",
-    boxShadow: "0 8px 22px rgba(5,15,30,0.06)",
     overflow: "hidden",
     borderRadius: "18px",
   },
@@ -339,6 +477,7 @@ const styles = {
     alignItems: "center",
     padding: "24px 26px 18px 26px",
     background: "#FFFFFF",
+    gap: "20px",
   },
 
   tableTitle: {
@@ -348,6 +487,13 @@ const styles = {
     fontWeight: "700",
   },
 
+  badgeGroup: {
+    display: "flex",
+    gap: "10px",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+
   badge: {
     background: "#EFF6FF",
     color: "#1848A0",
@@ -355,7 +501,38 @@ const styles = {
     padding: "8px 14px",
     borderRadius: "999px",
     fontSize: "13px",
-    fontWeight: "600",
+    fontWeight: "700",
+  },
+
+  presentBadge: {
+    background: "#DCFCE7",
+    color: "#166534",
+    border: "1px solid #86EFAC",
+    padding: "8px 14px",
+    borderRadius: "999px",
+    fontSize: "13px",
+    fontWeight: "700",
+  },
+
+  absentBadge: {
+    background: "#FEE2E2",
+    color: "#991B1B",
+    border: "1px solid #FCA5A5",
+    padding: "8px 14px",
+    borderRadius: "999px",
+    fontSize: "13px",
+    fontWeight: "700",
+  },
+
+  backSmallButton: {
+    background: "#2563EB",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "999px",
+    padding: "10px 18px",
+    cursor: "pointer",
+    fontSize: "13px",
+    fontWeight: "700",
   },
 
   table: {
@@ -378,7 +555,6 @@ const styles = {
     padding: "18px 22px",
     fontSize: "15px",
     borderBottom: "1px solid #E2E8F0",
-    verticalAlign: "middle",
   },
 
   presentPill: {

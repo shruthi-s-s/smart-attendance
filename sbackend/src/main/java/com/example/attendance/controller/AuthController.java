@@ -1,10 +1,13 @@
 package com.example.attendance.controller;
 
+import java.time.Duration;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.UUID;
 
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,13 +18,13 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.example.attendance.model.AttendanceRecord;
+import com.example.attendance.model.AttendanceSession;
 import com.example.attendance.model.Faculty;
 import com.example.attendance.model.Student;
 import com.example.attendance.repository.AttendanceRecordRepository;
+import com.example.attendance.repository.AttendanceSessionRepository;
 import com.example.attendance.repository.FacultyRepository;
 import com.example.attendance.repository.StudentRepository;
-
-import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/auth")
@@ -31,68 +34,50 @@ public class AuthController {
     private final StudentRepository studentRepository;
     private final FacultyRepository facultyRepository;
     private final AttendanceRecordRepository attendanceRecordRepository;
+    private final AttendanceSessionRepository attendanceSessionRepository;
 
-    private static String currentCode = "";
-    private static boolean sessionActive = false;
-    private static String currentSubject = "";
-    private static String currentClassName = "";
-    private static String currentSessionId = "";
-
-    private static long codeGeneratedTime = 0L;
-    private static final long CODE_EXPIRY_MILLIS = 15000;
-
-    private static String facultyIP = "";
+    private static final long CODE_EXPIRY_SECONDS = 15;
+    private static final double ALLOWED_DISTANCE_METERS = 30.0;
 
     public AuthController(StudentRepository studentRepository,
                           FacultyRepository facultyRepository,
-                          AttendanceRecordRepository attendanceRecordRepository) {
+                          AttendanceRecordRepository attendanceRecordRepository,
+                          AttendanceSessionRepository attendanceSessionRepository) {
         this.studentRepository = studentRepository;
         this.facultyRepository = facultyRepository;
         this.attendanceRecordRepository = attendanceRecordRepository;
+        this.attendanceSessionRepository = attendanceSessionRepository;
     }
 
     @PostMapping("/student-login")
     public Student studentLogin(@RequestBody Map<String, String> req) {
-        String email = req.get("email");
-        String password = req.get("password");
-
-        if (email == null || password == null || email.isBlank() || password.isBlank()) {
-            throw new RuntimeException("Email and password are required");
-        }
-
         return studentRepository
-                .findByEmailAndPassword(email, password)
+                .findByEmailAndPassword(req.get("email"), req.get("password"))
                 .orElseThrow(() -> new RuntimeException("Invalid student login"));
+    }
+
+    @GetMapping("/student-by-email")
+    public Student getStudentByEmail(@RequestParam String email) {
+        return studentRepository.findByEmail(email)
+                .orElseThrow(() -> new RuntimeException("Student not found"));
     }
 
     @PostMapping("/faculty-login")
     public Faculty facultyLogin(@RequestBody Map<String, String> req) {
-        String email = req.get("email");
-        String password = req.get("password");
-
-        if (email == null || password == null || email.isBlank() || password.isBlank()) {
-            throw new RuntimeException("Email and password are required");
-        }
-
         return facultyRepository
-                .findByEmailAndPassword(email, password)
+                .findByEmailAndPassword(req.get("email"), req.get("password"))
                 .orElseThrow(() -> new RuntimeException("Invalid faculty login"));
     }
 
     @PostMapping("/generate-code")
-    public Map<String, String> generateCode(@RequestBody Map<String, String> req,
-                                            HttpServletRequest request) {
+    public Map<String, String> generateCode(@RequestBody Map<String, String> req) {
 
         String subject = req.get("subject");
         String className = req.get("className");
+        String facultyEmail = req.getOrDefault("facultyEmail", "faculty@college.com");
 
-        if (subject == null || subject.isBlank()) {
-            throw new RuntimeException("Subject is missing");
-        }
-
-        if (className == null || className.isBlank()) {
-            throw new RuntimeException("Class name is missing");
-        }
+        Double facultyLatitude = Double.valueOf(req.get("latitude"));
+        Double facultyLongitude = Double.valueOf(req.get("longitude"));
 
         List<Student> students = studentRepository.findByClassName(className);
 
@@ -100,154 +85,124 @@ public class AuthController {
             throw new RuntimeException("No students found for class: " + className);
         }
 
-        currentCode = String.valueOf(1000 + new Random().nextInt(9000));
-        sessionActive = true;
-        currentSubject = subject;
-        currentClassName = className;
-        currentSessionId = String.valueOf(System.currentTimeMillis());
-        codeGeneratedTime = System.currentTimeMillis();
-        facultyIP = request.getRemoteAddr();
+        String generatedCode = String.valueOf(1000 + new Random().nextInt(9000));
 
-        System.out.println("=================================");
-        System.out.println("GENERATE CODE API CALLED");
-        System.out.println("Subject: " + subject);
-        System.out.println("Class Name: " + className);
-        System.out.println("Faculty IP: " + facultyIP);
-        System.out.println("Generated Code: " + currentCode);
-        System.out.println("Current Session ID: " + currentSessionId);
-        System.out.println("=================================");
+        AttendanceSession session = attendanceSessionRepository
+                .findFirstByActiveTrueOrderByStartTimeDesc()
+                .filter(s -> s.getSubject().equals(subject) && s.getClassName().equals(className))
+                .orElse(null);
 
-        for (Student student : students) {
-            student.setTotalClasses(student.getTotalClasses() + 1);
+        if (session == null) {
+            String sessionId = UUID.randomUUID().toString();
 
-            double percentage = student.getTotalClasses() == 0
-                    ? 0.0
-                    : (student.getPresentCount() * 100.0) / student.getTotalClasses();
+            session = new AttendanceSession();
+            session.setSessionId(sessionId);
+            session.setSubject(subject);
+            session.setClassName(className);
+            session.setFacultyEmail(facultyEmail);
+            session.setStartTime(LocalDateTime.now());
+            session.setActive(true);
 
-            student.setAttendancePercentage(percentage);
-            studentRepository.save(student);
+            attendanceSessionRepository.save(session);
 
-            AttendanceRecord record = new AttendanceRecord();
-            record.setSessionId(currentSessionId);
-            record.setRegNo(student.getRegNo());
-            record.setName(student.getName());
-            record.setClassName(className);
-            record.setSubject(subject);
-            record.setStatus("ABSENT");
-            record.setDate(LocalDate.now());
-            record.setTime(LocalTime.now());
-
-            attendanceRecordRepository.save(record);
+            for (Student student : students) {
+                AttendanceRecord record = new AttendanceRecord();
+                record.setSessionId(sessionId);
+                record.setRegNo(student.getRegNo());
+                record.setName(student.getName());
+                record.setClassName(className);
+                record.setSubject(subject);
+                record.setStatus("ABSENT");
+                record.setDate(LocalDate.now());
+                record.setTime(LocalTime.now());
+                attendanceRecordRepository.save(record);
+            }
         }
 
+        session.setCode(generatedCode);
+        session.setExpiresAt(LocalDateTime.now().plusSeconds(CODE_EXPIRY_SECONDS));
+        session.setFacultyLatitude(facultyLatitude);
+        session.setFacultyLongitude(facultyLongitude);
+
+        attendanceSessionRepository.save(session);
+
         return Map.of(
-                "code", currentCode,
+                "code", generatedCode,
+                "sessionId", session.getSessionId(),
                 "message", "Code generated successfully"
         );
     }
 
     @PostMapping("/mark-attendance")
-    public Map<String, String> markAttendance(@RequestBody Map<String, String> req,
-                                              HttpServletRequest request) {
+    public Map<String, String> markAttendance(@RequestBody Map<String, String> req) {
 
         String code = req.get("code");
         String regNo = req.get("regNo");
         String subject = req.get("subject");
         String className = req.get("className");
 
-        String studentIP = request.getRemoteAddr();
+        Double studentLatitude = Double.valueOf(req.get("latitude"));
+        Double studentLongitude = Double.valueOf(req.get("longitude"));
 
-        System.out.println("=================================");
-        System.out.println("MARK ATTENDANCE API CALLED");
-        System.out.println("Student IP: " + studentIP);
-        System.out.println("Faculty IP: " + facultyIP);
-        System.out.println("IP MATCH: " + studentIP.equals(facultyIP));
-        System.out.println("Entered Code: " + code);
-        System.out.println("Current Code: " + currentCode);
-        System.out.println("Reg No: " + regNo);
-        System.out.println("Subject: " + subject);
-        System.out.println("Class Name: " + className);
-        System.out.println("Current Session ID: " + currentSessionId);
-        System.out.println("=================================");
+        AttendanceSession session = attendanceSessionRepository
+                .findFirstByActiveTrueOrderByStartTimeDesc()
+                .orElseThrow(() -> new RuntimeException("No active attendance session"));
 
-        if (!sessionActive) {
-            throw new RuntimeException("Attendance session is not active");
+        if (!session.getSubject().equals(subject)) {
+            throw new RuntimeException("Wrong subject selected");
         }
 
-        if (code == null || code.isBlank()) {
-            throw new RuntimeException("Code is required");
+        if (!session.getClassName().equals(className)) {
+            throw new RuntimeException("Wrong class selected");
         }
 
-        if (regNo == null || regNo.isBlank()) {
-            throw new RuntimeException("Register number is required");
+        if (LocalDateTime.now().isAfter(session.getExpiresAt())) {
+            throw new RuntimeException("Code expired. Ask faculty to generate a new code.");
         }
 
-        if (subject == null || subject.isBlank()) {
-            throw new RuntimeException("Subject is required");
-        }
-
-        if (className == null || className.isBlank()) {
-            throw new RuntimeException("Class name is required");
-        }
-
-        long elapsedTime = System.currentTimeMillis() - codeGeneratedTime;
-
-        if (elapsedTime > CODE_EXPIRY_MILLIS) {
-            sessionActive = false;
-            currentCode = "";
-            throw new RuntimeException("Code expired. Attendance must be marked within 15 seconds.");
-        }
-
-        if (!studentIP.equals(facultyIP)) {
-            throw new RuntimeException("You are not on the same network as faculty");
-        }
-
-        if (!code.equals(currentCode)) {
+        if (!session.getCode().equals(code)) {
             throw new RuntimeException("Invalid code");
         }
 
-        if (!subject.equals(currentSubject) || !className.equals(currentClassName)) {
-            throw new RuntimeException("Student subject/class mismatch");
+        double distance = calculateDistance(
+                session.getFacultyLatitude(),
+                session.getFacultyLongitude(),
+                studentLatitude,
+                studentLongitude
+        );
+
+        if (distance > ALLOWED_DISTANCE_METERS) {
+            throw new RuntimeException("You are not within 30 meters of faculty");
         }
 
         Student student = studentRepository.findByRegNo(regNo)
                 .orElseThrow(() -> new RuntimeException("Student not found"));
 
-        AttendanceRecord record = attendanceRecordRepository
-                .findBySessionIdAndRegNo(currentSessionId, regNo)
-                .orElseThrow(() -> new RuntimeException("Attendance record not found for current session"));
-
-        if (!"PRESENT".equalsIgnoreCase(record.getStatus())) {
-            record.setStatus("PRESENT");
-            record.setDate(LocalDate.now());
-            record.setTime(LocalTime.now());
-
-            attendanceRecordRepository.save(record);
-
-            student.setPresentCount(student.getPresentCount() + 1);
-
-            double percentage = student.getTotalClasses() == 0
-                    ? 0.0
-                    : (student.getPresentCount() * 100.0) / student.getTotalClasses();
-
-            student.setAttendancePercentage(percentage);
-            studentRepository.save(student);
+        if (!student.getClassName().equals(className)) {
+            throw new RuntimeException("Student does not belong to this class");
         }
 
-        return Map.of("message", "Attendance marked successfully");
+        AttendanceRecord record = attendanceRecordRepository
+                .findBySessionIdAndRegNo(session.getSessionId(), regNo)
+                .orElseThrow(() -> new RuntimeException("Attendance record not found"));
+
+        record.setStatus("PRESENT");
+        record.setDate(LocalDate.now());
+        record.setTime(LocalTime.now());
+
+        attendanceRecordRepository.save(record);
+
+        return Map.of(
+                "message", "Attendance marked successfully",
+                "distance", String.format("%.2f meters", distance)
+        );
     }
 
     @GetMapping("/current-attendance")
     public List<AttendanceRecord> getCurrentAttendance() {
-        System.out.println("API HIT: /auth/current-attendance");
-        System.out.println("Session Active: " + sessionActive);
-        System.out.println("Current Session ID: " + currentSessionId);
-
-        if (!sessionActive || currentSessionId == null || currentSessionId.isBlank()) {
-            return List.of();
-        }
-
-        return attendanceRecordRepository.findBySessionId(currentSessionId);
+        return attendanceSessionRepository.findFirstByActiveTrueOrderByStartTimeDesc()
+                .map(session -> attendanceRecordRepository.findBySessionId(session.getSessionId()))
+                .orElse(List.of());
     }
 
     @GetMapping("/attendance")
@@ -265,59 +220,114 @@ public class AuthController {
     @GetMapping("/attendance-percentage")
     public Map<String, Double> getAttendancePercentage(@RequestParam String regNo,
                                                        @RequestParam String subject) {
-        Student student = studentRepository.findByRegNo(regNo)
-                .orElseThrow(() -> new RuntimeException("Student not found"));
 
-        return Map.of("percentage", student.getAttendancePercentage());
-    }
+        long total = attendanceRecordRepository.countByRegNoAndSubject(regNo, subject);
+        long present = attendanceRecordRepository.countByRegNoAndSubjectAndStatus(regNo, subject, "PRESENT");
 
-    @GetMapping("/remaining-time")
-    public Map<String, Object> getRemainingTime() {
-        if (!sessionActive || codeGeneratedTime == 0L) {
-            return Map.of("active", false, "remainingSeconds", 0);
-        }
+        double percentage = total == 0 ? 0.0 : (present * 100.0) / total;
 
-        long elapsed = System.currentTimeMillis() - codeGeneratedTime;
-        long remaining = CODE_EXPIRY_MILLIS - elapsed;
-
-        if (remaining <= 0) {
-            sessionActive = false;
-            currentCode = "";
-            return Map.of("active", false, "remainingSeconds", 0);
-        }
-
-        return Map.of(
-                "active", true,
-                "remainingSeconds", remaining / 1000
-        );
+        return Map.of("percentage", percentage);
     }
 
     @GetMapping("/student-stats")
-    public Map<String, Object> getStudentStats(@RequestParam String regNo) {
+    public Map<String, Object> getStudentStats(@RequestParam String regNo,
+                                               @RequestParam String subject) {
+
         Student student = studentRepository.findByRegNo(regNo)
                 .orElseThrow(() -> new RuntimeException("Student not found"));
+
+        long total = attendanceRecordRepository.countByRegNoAndSubject(regNo, subject);
+        long present = attendanceRecordRepository.countByRegNoAndSubjectAndStatus(regNo, subject, "PRESENT");
+
+        double percentage = total == 0 ? 0.0 : (present * 100.0) / total;
 
         return Map.of(
                 "name", student.getName(),
                 "regNo", student.getRegNo(),
                 "className", student.getClassName(),
-                "totalClasses", student.getTotalClasses(),
-                "presentCount", student.getPresentCount(),
-                "attendancePercentage", student.getAttendancePercentage(),
-                "parentPhoneNumber", student.getParentPhoneNumber()
+                "subject", subject,
+                "totalClasses", total,
+                "presentCount", present,
+                "attendancePercentage", percentage
         );
+    }
+
+    @GetMapping("/remaining-time")
+    public Map<String, Object> getRemainingTime() {
+        return attendanceSessionRepository.findFirstByActiveTrueOrderByStartTimeDesc()
+                .map(session -> {
+                    long remaining = Duration.between(LocalDateTime.now(), session.getExpiresAt()).getSeconds();
+
+                    if (remaining <= 0) {
+                        return Map.<String, Object>of(
+                                "active", true,
+                                "codeActive", false,
+                                "remainingSeconds", 0,
+                                "subject", session.getSubject(),
+                                "className", session.getClassName()
+                        );
+                    }
+
+                    return Map.<String, Object>of(
+                            "active", true,
+                            "codeActive", true,
+                            "remainingSeconds", remaining,
+                            "subject", session.getSubject(),
+                            "className", session.getClassName()
+                    );
+                })
+                .orElse(Map.of(
+                        "active", false,
+                        "codeActive", false,
+                        "remainingSeconds", 0
+                ));
+    }
+
+    @GetMapping("/attendance-summary")
+    public List<Map<String, Object>> getAttendanceSummary(@RequestParam String className,
+                                                          @RequestParam String subject) {
+
+        List<Student> students = studentRepository.findByClassName(className);
+
+        return students.stream().map(student -> {
+            long total = attendanceRecordRepository.countByRegNoAndSubject(student.getRegNo(), subject);
+            long present = attendanceRecordRepository.countByRegNoAndSubjectAndStatus(student.getRegNo(), subject, "PRESENT");
+
+            double percentage = total == 0 ? 0.0 : (present * 100.0) / total;
+
+            return Map.<String, Object>of(
+                    "regNo", student.getRegNo(),
+                    "name", student.getName(),
+                    "presentCount", present,
+                    "totalClasses", total,
+                    "percentage", percentage
+            );
+        }).toList();
     }
 
     @PostMapping("/end-attendance")
     public Map<String, String> endAttendance() {
-        sessionActive = false;
-        currentCode = "";
-        currentSubject = "";
-        currentClassName = "";
-        currentSessionId = "";
-        codeGeneratedTime = 0L;
-        facultyIP = "";
+        attendanceSessionRepository.findFirstByActiveTrueOrderByStartTimeDesc()
+                .ifPresent(session -> {
+                    session.setActive(false);
+                    attendanceSessionRepository.save(session);
+                });
 
         return Map.of("message", "Attendance session ended");
+    }
+
+    private double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+        final int R = 6371000;
+
+        double latDistance = Math.toRadians(lat2 - lat1);
+        double lonDistance = Math.toRadians(lon2 - lon1);
+
+        double a = Math.sin(latDistance / 2) * Math.sin(latDistance / 2)
+                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
+                * Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
+
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+        return R * c;
     }
 }

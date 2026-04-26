@@ -16,4 +16,8 @@ public interface AttendanceRecordRepository extends JpaRepository<AttendanceReco
     List<AttendanceRecord> findByRegNoAndSubjectOrderByDateDescTimeDesc(String regNo, String subject);
 
     List<AttendanceRecord> findBySessionId(String sessionId);
+
+    long countByRegNoAndSubject(String regNo, String subject);
+
+    long countByRegNoAndSubjectAndStatus(String regNo, String subject, String status);
 }

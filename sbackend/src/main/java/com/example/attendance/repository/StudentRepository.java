@@ -8,7 +8,12 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import com.example.attendance.model.Student;
 
 public interface StudentRepository extends JpaRepository<Student, Long> {
+
     Optional<Student> findByEmailAndPassword(String email, String password);
-    List<Student> findByClassName(String className);
+
     Optional<Student> findByRegNo(String regNo);
+
+    Optional<Student> findByEmail(String email);
+
+    List<Student> findByClassName(String className);
 }
