@@ -208,8 +208,6 @@ function StudentDashboard() {
             {loading ? "Checking Location..." : "Submit Code"}
           </button>
 
-        
-
           {message && <p style={styles.message}>{message}</p>}
         </div>
 
@@ -231,6 +229,13 @@ function StudentDashboard() {
               <h3 style={styles.statValue}>{stats?.totalClasses || 0}</h3>
             </div>
           </div>
+
+          {percentage < 75 && stats?.totalClasses > 0 && (
+            <p style={styles.warningText}>
+              You need to attend {stats?.neededClasses || 0} upcoming classes
+              continuously to reach 75% attendance.
+            </p>
+          )}
         </div>
       </div>
 
@@ -383,13 +388,6 @@ const styles = {
     fontWeight: "700",
   },
 
-  geoText: {
-    color: "#93C5FD",
-    fontSize: "13px",
-    textAlign: "center",
-    marginTop: "18px",
-  },
-
   message: {
     color: "#DBEAFF",
     fontSize: "15px",
@@ -451,6 +449,14 @@ const styles = {
     color: "#FFFFFF",
     fontSize: "32px",
     margin: "8px 0 0 0",
+  },
+
+  warningText: {
+    marginTop: "22px",
+    color: "#FCA5A5",
+    fontSize: "16px",
+    fontWeight: "700",
+    lineHeight: "1.5",
   },
 
   backButton: {

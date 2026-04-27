@@ -4,6 +4,8 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -126,11 +128,11 @@ public class AuthController {
 
         attendanceSessionRepository.save(session);
 
-        return Map.of(
-                "code", generatedCode,
-                "sessionId", session.getSessionId(),
-                "message", "Code generated successfully"
-        );
+        Map<String, String> response = new HashMap<>();
+        response.put("code", generatedCode);
+        response.put("sessionId", session.getSessionId());
+        response.put("message", "Code generated successfully");
+        return response;
     }
 
     @PostMapping("/mark-attendance")
@@ -192,17 +194,17 @@ public class AuthController {
 
         attendanceRecordRepository.save(record);
 
-        return Map.of(
-                "message", "Attendance marked successfully",
-                "distance", String.format("%.2f meters", distance)
-        );
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "Attendance marked successfully");
+        response.put("distance", String.format("%.2f meters", distance));
+        return response;
     }
 
     @GetMapping("/current-attendance")
     public List<AttendanceRecord> getCurrentAttendance() {
         return attendanceSessionRepository.findFirstByActiveTrueOrderByStartTimeDesc()
                 .map(session -> attendanceRecordRepository.findBySessionId(session.getSessionId()))
-                .orElse(List.of());
+                .orElse(new ArrayList<>());
     }
 
     @GetMapping("/attendance")
@@ -226,7 +228,9 @@ public class AuthController {
 
         double percentage = total == 0 ? 0.0 : (present * 100.0) / total;
 
-        return Map.of("percentage", percentage);
+        Map<String, Double> response = new HashMap<>();
+        response.put("percentage", percentage);
+        return response;
     }
 
     @GetMapping("/student-stats")
@@ -241,15 +245,27 @@ public class AuthController {
 
         double percentage = total == 0 ? 0.0 : (present * 100.0) / total;
 
-        return Map.of(
-                "name", student.getName(),
-                "regNo", student.getRegNo(),
-                "className", student.getClassName(),
-                "subject", subject,
-                "totalClasses", total,
-                "presentCount", present,
-                "attendancePercentage", percentage
-        );
+        int neededClasses = 0;
+
+        if (percentage < 75 && total > 0) {
+            neededClasses = (int) Math.ceil(((0.75 * total) - present) / 0.25);
+
+            if (neededClasses < 0) {
+                neededClasses = 0;
+            }
+        }
+
+        Map<String, Object> response = new HashMap<>();
+        response.put("name", student.getName());
+        response.put("regNo", student.getRegNo());
+        response.put("className", student.getClassName());
+        response.put("subject", subject);
+        response.put("totalClasses", total);
+        response.put("presentCount", present);
+        response.put("attendancePercentage", percentage);
+        response.put("neededClasses", neededClasses);
+
+        return response;
     }
 
     @GetMapping("/remaining-time")
@@ -258,29 +274,28 @@ public class AuthController {
                 .map(session -> {
                     long remaining = Duration.between(LocalDateTime.now(), session.getExpiresAt()).getSeconds();
 
+                    Map<String, Object> response = new HashMap<>();
+                    response.put("active", true);
+                    response.put("subject", session.getSubject());
+                    response.put("className", session.getClassName());
+
                     if (remaining <= 0) {
-                        return Map.<String, Object>of(
-                                "active", true,
-                                "codeActive", false,
-                                "remainingSeconds", 0,
-                                "subject", session.getSubject(),
-                                "className", session.getClassName()
-                        );
+                        response.put("codeActive", false);
+                        response.put("remainingSeconds", 0);
+                    } else {
+                        response.put("codeActive", true);
+                        response.put("remainingSeconds", remaining);
                     }
 
-                    return Map.<String, Object>of(
-                            "active", true,
-                            "codeActive", true,
-                            "remainingSeconds", remaining,
-                            "subject", session.getSubject(),
-                            "className", session.getClassName()
-                    );
+                    return response;
                 })
-                .orElse(Map.of(
-                        "active", false,
-                        "codeActive", false,
-                        "remainingSeconds", 0
-                ));
+                .orElseGet(() -> {
+                    Map<String, Object> response = new HashMap<>();
+                    response.put("active", false);
+                    response.put("codeActive", false);
+                    response.put("remainingSeconds", 0);
+                    return response;
+                });
     }
 
     @GetMapping("/attendance-summary")
@@ -288,21 +303,60 @@ public class AuthController {
                                                           @RequestParam String subject) {
 
         List<Student> students = studentRepository.findByClassName(className);
+        List<Map<String, Object>> result = new ArrayList<>();
 
-        return students.stream().map(student -> {
+        for (Student student : students) {
             long total = attendanceRecordRepository.countByRegNoAndSubject(student.getRegNo(), subject);
             long present = attendanceRecordRepository.countByRegNoAndSubjectAndStatus(student.getRegNo(), subject, "PRESENT");
 
             double percentage = total == 0 ? 0.0 : (present * 100.0) / total;
 
-            return Map.<String, Object>of(
-                    "regNo", student.getRegNo(),
-                    "name", student.getName(),
-                    "presentCount", present,
-                    "totalClasses", total,
-                    "percentage", percentage
-            );
-        }).toList();
+            Map<String, Object> data = new HashMap<>();
+            data.put("regNo", student.getRegNo());
+            data.put("name", student.getName());
+            data.put("presentCount", present);
+            data.put("totalClasses", total);
+            data.put("percentage", percentage);
+
+            result.add(data);
+        }
+
+        return result;
+    }
+
+    @GetMapping(value = "/attendance-csv", produces = "text/csv")
+    public String downloadAttendanceCSV(@RequestParam String className,
+                                        @RequestParam String subject) {
+
+        List<Student> students = studentRepository.findByClassName(className);
+
+        StringBuilder csv = new StringBuilder();
+
+        csv.append("Reg No,Name,Subject,Classes Attended,Total Classes,Percentage\n");
+
+        for (Student student : students) {
+
+            long total = attendanceRecordRepository
+                    .countByRegNoAndSubject(student.getRegNo(), subject);
+
+            long present = attendanceRecordRepository
+                    .countByRegNoAndSubjectAndStatus(
+                            student.getRegNo(),
+                            subject,
+                            "PRESENT"
+                    );
+
+            double percentage = total == 0 ? 0.0 : (present * 100.0) / total;
+
+            csv.append(student.getRegNo()).append(",");
+            csv.append(student.getName()).append(",");
+            csv.append(subject).append(",");
+            csv.append(present).append(",");
+            csv.append(total).append(",");
+            csv.append(String.format("%.2f", percentage)).append("\n");
+        }
+
+        return csv.toString();
     }
 
     @PostMapping("/end-attendance")
@@ -313,7 +367,9 @@ public class AuthController {
                     attendanceSessionRepository.save(session);
                 });
 
-        return Map.of("message", "Attendance session ended");
+        Map<String, String> response = new HashMap<>();
+        response.put("message", "Attendance session ended");
+        return response;
     }
 
     private double calculateDistance(double lat1, double lon1, double lat2, double lon2) {

@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import axios from "axios";
 
 function FacultyDashboard() {
+  const [selectedClass, setSelectedClass] = useState(null);
+
   const [code, setCode] = useState("");
   const [students, setStudents] = useState([]);
   const [summary, setSummary] = useState([]);
@@ -13,12 +15,34 @@ function FacultyDashboard() {
 
   const facultyName = localStorage.getItem("facultyName") || "Faculty";
   const subject = localStorage.getItem("facultySubject") || "Operating Systems";
-  const className = localStorage.getItem("facultyClassName") || "AIDS-A";
-  const facultyEmail = localStorage.getItem("facultyEmail") || "faculty@college.com";
+  const facultyEmail =
+    localStorage.getItem("facultyEmail") || "faculty@college.com";
 
   const API_BASE = "http://localhost:8080/auth";
 
+  const classOptions = ["AIDS-A"];
+
+  const className = selectedClass;
+
+  const chooseClass = (cls) => {
+    setSelectedClass(cls);
+    localStorage.setItem("facultyClassName", cls);
+  };
+
+  const backToClasses = () => {
+    setSelectedClass(null);
+    setCode("");
+    setStudents([]);
+    setSummary([]);
+    setShowSummary(false);
+    setRemainingTime(0);
+    setPresentCount(0);
+    setAbsentCount(0);
+  };
+
   const loadAttendance = async () => {
+    if (!className) return;
+
     try {
       const res = await axios.get(`${API_BASE}/current-attendance`);
       const data = Array.isArray(res.data) ? res.data : [];
@@ -34,6 +58,8 @@ function FacultyDashboard() {
   };
 
   const loadSummary = async () => {
+    if (!className) return;
+
     try {
       const res = await axios.get(`${API_BASE}/attendance-summary`, {
         params: {
@@ -46,6 +72,33 @@ function FacultyDashboard() {
       setShowSummary(true);
     } catch {
       alert("Error loading attendance summary");
+    }
+  };
+
+  const downloadCSV = async () => {
+    if (!className) return;
+
+    try {
+      const res = await axios.get(`${API_BASE}/attendance-csv`, {
+        params: {
+          className: className,
+          subject: subject,
+        },
+        responseType: "blob",
+      });
+
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.setAttribute("download", `${className}_${subject}_attendance.csv`);
+
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      alert("CSV download failed");
     }
   };
 
@@ -65,6 +118,11 @@ function FacultyDashboard() {
   };
 
   const generateCode = async () => {
+    if (!className) {
+      alert("Choose a class first");
+      return;
+    }
+
     setLoading(true);
 
     if (!navigator.geolocation) {
@@ -91,7 +149,11 @@ function FacultyDashboard() {
           setShowSummary(false);
           await loadAttendance();
         } catch (err) {
-          alert(err.response?.data?.message || err.response?.data || "Error generating code");
+          alert(
+            err.response?.data?.message ||
+              err.response?.data ||
+              "Error generating code"
+          );
         } finally {
           setLoading(false);
         }
@@ -118,6 +180,8 @@ function FacultyDashboard() {
   };
 
   useEffect(() => {
+    if (!selectedClass) return;
+
     loadAttendance();
     loadRemainingTime();
 
@@ -127,7 +191,43 @@ function FacultyDashboard() {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [selectedClass]);
+
+  if (!selectedClass) {
+    return (
+      <div style={styles.page}>
+        <div style={styles.shell}>
+          <div style={styles.topBar}>
+            <div>
+              <h1 style={styles.title}>Welcome, {facultyName}</h1>
+              <p style={styles.subtitle}>{subject}</p>
+            </div>
+
+            <div style={styles.profileWrap}>
+              <div style={styles.profileAvatar}></div>
+              <span style={styles.profileText}>Profile</span>
+            </div>
+          </div>
+
+          <div style={styles.classSection}>
+            <h2 style={styles.classHeading}>Choose Class</h2>
+
+            <div style={styles.classGrid}>
+              {classOptions.map((cls) => (
+                <button
+                  key={cls}
+                  style={styles.classCard}
+                  onClick={() => chooseClass(cls)}
+                >
+                  {cls}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={styles.page}>
@@ -141,8 +241,16 @@ function FacultyDashboard() {
           </div>
 
           <div style={styles.topRight}>
+            <button style={styles.backClassButton} onClick={backToClasses}>
+              Change Class
+            </button>
+
             <button style={styles.viewButton} onClick={loadSummary}>
               View Attendance
+            </button>
+
+            <button style={styles.downloadButton} onClick={downloadCSV}>
+              Download CSV
             </button>
 
             <div style={styles.profileWrap}>
@@ -164,10 +272,12 @@ function FacultyDashboard() {
               Time Left: {remainingTime > 0 ? `${remainingTime}s` : "Expired"}
             </p>
 
-            
-
             <div style={styles.buttonRow}>
-              <button style={styles.primaryButton} onClick={generateCode} disabled={loading}>
+              <button
+                style={styles.primaryButton}
+                onClick={generateCode}
+                disabled={loading}
+              >
                 {loading ? "Getting Location..." : "Generate Code"}
               </button>
 
@@ -187,21 +297,24 @@ function FacultyDashboard() {
                 <div style={styles.sectionLabel}>
                   {showSummary ? "ATTENDANCE SUMMARY" : "CURRENT SESSION"}
                 </div>
-                <h3 style={styles.tableTitle}>
-                  {subject} Attendance
-                </h3>
+                <h3 style={styles.tableTitle}>{subject} Attendance</h3>
               </div>
 
               {!showSummary && (
                 <div style={styles.badgeGroup}>
                   <span style={styles.badge}>{students.length} Students</span>
-                  <span style={styles.presentBadge}>{presentCount} Present</span>
+                  <span style={styles.presentBadge}>
+                    {presentCount} Present
+                  </span>
                   <span style={styles.absentBadge}>{absentCount} Absent</span>
                 </div>
               )}
 
               {showSummary && (
-                <button style={styles.backSmallButton} onClick={() => setShowSummary(false)}>
+                <button
+                  style={styles.backSmallButton}
+                  onClick={() => setShowSummary(false)}
+                >
                   Back to Session
                 </button>
               )}
@@ -336,18 +449,7 @@ const styles = {
   topRight: {
     display: "flex",
     alignItems: "center",
-    gap: "24px",
-  },
-
-  viewButton: {
-    background: "#F97316",
-    color: "#FFFFFF",
-    border: "none",
-    borderRadius: "999px",
-    padding: "12px 28px",
-    cursor: "pointer",
-    fontSize: "15px",
-    fontWeight: "700",
+    gap: "14px",
   },
 
   profileWrap: {
@@ -368,6 +470,69 @@ const styles = {
     color: "#FFFFFF",
     fontSize: "16px",
     fontWeight: "500",
+  },
+
+  classSection: {
+    marginTop: "50px",
+    padding: "0 30px",
+  },
+
+  classHeading: {
+    color: "#050F1E",
+    fontSize: "30px",
+    fontWeight: "700",
+    marginBottom: "24px",
+  },
+
+  classGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(4, 1fr)",
+    gap: "28px",
+  },
+
+  classCard: {
+    height: "150px",
+    background: "#082144",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "16px",
+    boxShadow: "0 14px 28px rgba(0,0,0,0.08)",
+    fontSize: "28px",
+    fontWeight: "700",
+    cursor: "pointer",
+  },
+
+  backClassButton: {
+    background: "#475569",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "999px",
+    padding: "12px 22px",
+    cursor: "pointer",
+    fontSize: "15px",
+    fontWeight: "700",
+  },
+
+  viewButton: {
+    background: "#F97316",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "999px",
+    padding: "12px 24px",
+    cursor: "pointer",
+    fontSize: "15px",
+    fontWeight: "700",
+  },
+
+  downloadButton: {
+    background: "#16A34A",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: "999px",
+    padding: "12px 24px",
+    cursor: "pointer",
+    fontSize: "15px",
+    fontWeight: "700",
   },
 
   detailContent: {
@@ -416,13 +581,6 @@ const styles = {
     fontWeight: "600",
     margin: "0 0 8px 0",
     textAlign: "center",
-  },
-
-  locationNote: {
-    color: "#93C5FD",
-    fontSize: "13px",
-    textAlign: "center",
-    marginBottom: "18px",
   },
 
   buttonRow: {
